@@ -3,6 +3,8 @@ import requests
 import json
 from datetime import datetime
 import time
+from rag_pipeline import RAGPipeline, is_valid_file
+import os
 
 # Set page configuration
 st.set_page_config(page_title="Ollama Chat", page_icon="💭", layout="wide")
@@ -90,6 +92,11 @@ def generate_chat_title(first_message):
         title += "..."
     return title
 
+# Initialize RAG pipeline
+@st.cache_resource
+def get_rag_pipeline():
+    return RAGPipeline(persist_dir="./chroma_db")
+
 # Initialize session state
 if 'chats' not in st.session_state:
     st.session_state.chats = {}  # Dictionary to store all chats
@@ -97,6 +104,10 @@ if 'current_chat_id' not in st.session_state:
     st.session_state.current_chat_id = None
 if 'debug_mode' not in st.session_state:
     st.session_state.debug_mode = False
+if 'rag_mode' not in st.session_state:
+    st.session_state.rag_mode = False
+if 'documents_indexed' not in st.session_state:
+    st.session_state.documents_indexed = False
 
 # Main UI
 st.title("💭 Ollama Chat Interface")
@@ -111,8 +122,70 @@ with st.sidebar:
     else:
         selected_model = st.selectbox("Choose a model:", models)
     
-    # Debug mode toggle
-    st.session_state.debug_mode = st.checkbox("Debug Mode", value=st.session_state.debug_mode)
+    # Mode toggles
+    st.header("Mode Settings")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.session_state.debug_mode = st.checkbox("Debug Mode", value=st.session_state.debug_mode)
+    with col2:
+        st.session_state.rag_mode = st.checkbox("RAG Mode", value=st.session_state.rag_mode)
+    
+    # RAG Settings
+    if st.session_state.rag_mode:
+        st.subheader("RAG Settings")
+        upload_type = st.radio("Upload Type", ["Files", "Directory Path"])
+        
+        if upload_type == "Files":
+            uploaded_files = st.file_uploader(
+                "Upload Documents", 
+                accept_multiple_files=True,
+                type=['txt', 'pdf', 'docx', 'doc', 'md']
+            )
+            
+            if uploaded_files and st.button("Index Documents"):
+                with st.spinner("Indexing documents..."):
+                    rag = get_rag_pipeline()
+                    # Save uploaded files temporarily
+                    temp_files = []
+                    for file in uploaded_files:
+                        temp_path = f"temp_{file.name}"
+                        with open(temp_path, "wb") as f:
+                            f.write(file.getbuffer())
+                        temp_files.append(temp_path)
+                    
+                    try:
+                        num_docs = rag.index_documents(files=temp_files)
+                        st.session_state.documents_indexed = True
+                        st.success(f"Successfully indexed {num_docs} documents!")
+                    except Exception as e:
+                        st.error(f"Error indexing documents: {str(e)}")
+                    finally:
+                        # Cleanup temp files
+                        for temp_file in temp_files:
+                            if os.path.exists(temp_file):
+                                os.remove(temp_file)
+        
+        else:  # Directory Path
+            dir_path = st.text_input("Enter Directory Path")
+            if dir_path and st.button("Index Documents"):
+                with st.spinner("Indexing documents..."):
+                    try:
+                        rag = get_rag_pipeline()
+                        num_docs = rag.index_documents(directory_path=dir_path)
+                        st.session_state.documents_indexed = True
+                        st.success(f"Successfully indexed {num_docs} documents!")
+                    except Exception as e:
+                        st.error(f"Error indexing documents: {str(e)}")
+        
+        if st.session_state.documents_indexed:
+            if st.button("Clear Index"):
+                try:
+                    rag = get_rag_pipeline()
+                    rag.clear_index()
+                    st.session_state.documents_indexed = False
+                    st.success("Index cleared successfully!")
+                except Exception as e:
+                    st.error(f"Error clearing index: {str(e)}")
     
     # New chat button
     if st.button("New Chat"):
@@ -185,10 +258,24 @@ if selected_model:
             response_placeholder = st.empty()
             full_response = ""
             
+            if st.session_state.rag_mode and st.session_state.documents_indexed:
+                try:
+                    rag = get_rag_pipeline()
+                    rag_response = rag.query(prompt)
+                    context = "\n\nRelevant context:\n" + "\n".join(
+                        [f"- {source['text']}" for source in rag_response["sources"]]
+                    )
+                    enhanced_prompt = f"Given this context: {context}\n\nQuestion: {prompt}\n\nPlease provide a detailed answer based on the context provided."
+                except Exception as e:
+                    st.error(f"Error querying RAG pipeline: {str(e)}")
+                    enhanced_prompt = prompt
+            else:
+                enhanced_prompt = prompt
+            
             # Display streaming response
             for response_chunk in chat_with_ollama(
                 selected_model,
-                prompt,
+                enhanced_prompt,
                 [{"role": m["role"], "content": m["content"]} for m in current_chat["messages"][:-1]]
             ):
                 full_response += response_chunk

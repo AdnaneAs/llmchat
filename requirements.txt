@@ -1,3 +1,10 @@
-streamlit>=1.24.0
-requests>=2.31.0
-python-dotenv>=1.0.0
+streamlit
+chromadb>=0.4.22
+python-dotenv
+pypdf
+docx2txt
+langchain
+langchain-community
+langchain-core
+langchain-ollama
+numpy
