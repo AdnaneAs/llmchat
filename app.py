@@ -7,6 +7,36 @@ import time
 # Set page configuration
 st.set_page_config(page_title="Ollama Chat", page_icon="💭", layout="wide")
 
+# Add custom CSS for hover delete button
+st.markdown("""
+<style>
+.chat-container {
+    position: relative;
+    padding-right: 30px;
+    margin-bottom: 5px;
+}
+.chat-container:hover .delete-btn {
+    opacity: 1;
+}
+.delete-btn {
+    position: absolute;
+    right: 5px;
+    top: 50%;
+    transform: translateY(-50%);
+    opacity: 0;
+    transition: opacity 0.2s;
+    background: none;
+    border: none;
+    color: #ff4b4b;
+    cursor: pointer;
+    padding: 0 5px;
+}
+.delete-btn:hover {
+    color: #ff0000;
+}
+</style>
+""", unsafe_allow_html=True)
+
 @st.cache_data(ttl=300)  # Cache model list for 5 minutes
 def get_ollama_models():
     """Fetch available Ollama models"""
@@ -99,9 +129,21 @@ with st.sidebar:
     st.header("Chat History")
     for chat_id, chat_data in st.session_state.chats.items():
         chat_title = f"{chat_data['title']} ({chat_data['model']})"
-        if st.sidebar.button(chat_title, key=f"chat_{chat_id}"):
-            st.session_state.current_chat_id = chat_id
-            st.rerun()
+        
+        # Create a container for each chat with delete button
+        col1, col2 = st.sidebar.columns([4, 1])
+        
+        with col1:
+            if st.button(chat_title, key=f"chat_{chat_id}"):
+                st.session_state.current_chat_id = chat_id
+                st.rerun()
+        
+        with col2:
+            if st.button("🗑️", key=f"delete_{chat_id}", help="Delete chat"):
+                del st.session_state.chats[chat_id]
+                if st.session_state.current_chat_id == chat_id:
+                    st.session_state.current_chat_id = None
+                st.rerun()
 
     st.markdown("---")
     st.markdown("""
