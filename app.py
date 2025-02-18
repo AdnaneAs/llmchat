@@ -1,10 +1,13 @@
 import streamlit as st
 import requests
 import json
+from datetime import datetime
+import time
 
 # Set page configuration
 st.set_page_config(page_title="Ollama Chat", page_icon="💭", layout="wide")
 
+@st.cache_data(ttl=300)  # Cache model list for 5 minutes
 def get_ollama_models():
     """Fetch available Ollama models"""
     try:
@@ -25,36 +28,43 @@ def chat_with_ollama(model, message, context=[]):
             "messages": context + [{"role": "user", "content": message}]
         }
         
-        # Debug: Show the request payload
         if st.session_state.get('debug_mode', False):
             st.info("Request Payload:")
             st.json(payload)
         
-        response = requests.post('http://localhost:11434/api/chat', json=payload)
-        
-        if st.session_state.get('debug_mode', False):
-            st.info(f"Response Status Code: {response.status_code}")
-            st.info("Raw Response:")
-            st.text(response.text)
+        response = requests.post('http://localhost:11434/api/chat', json=payload, stream=True)
         
         if response.status_code == 200:
-            # Handle streaming response by splitting into lines and parsing each JSON object
             full_response = ""
-            for line in response.text.strip().split('\n'):
-                try:
-                    response_data = json.loads(line)
-                    if 'message' in response_data:
-                        full_response += response_data['message'].get('content', '')
-                except json.JSONDecodeError:
-                    continue
-            return full_response
-        return f"Error: Unable to get response from model (Status code: {response.status_code})"
+            for line in response.iter_lines():
+                if line:
+                    try:
+                        response_data = json.loads(line)
+                        if 'message' in response_data:
+                            content = response_data['message'].get('content', '')
+                            full_response += content
+                            # Yield partial response for streaming
+                            yield content
+                    except json.JSONDecodeError:
+                        continue
+        else:
+            yield f"Error: Unable to get response from model (Status code: {response.status_code})"
     except Exception as e:
-        return f"Error: {str(e)}"
+        yield f"Error: {str(e)}"
 
-# Initialize session state for chat history and debug mode
-if 'messages' not in st.session_state:
-    st.session_state.messages = []
+def generate_chat_title(first_message):
+    """Generate a title from the first message"""
+    max_length = 30
+    title = first_message[:max_length]
+    if len(first_message) > max_length:
+        title += "..."
+    return title
+
+# Initialize session state
+if 'chats' not in st.session_state:
+    st.session_state.chats = {}  # Dictionary to store all chats
+if 'current_chat_id' not in st.session_state:
+    st.session_state.current_chat_id = None
 if 'debug_mode' not in st.session_state:
     st.session_state.debug_mode = False
 
@@ -76,9 +86,23 @@ with st.sidebar:
     
     # New chat button
     if st.button("New Chat"):
-        st.session_state.messages = []
+        chat_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        st.session_state.chats[chat_id] = {
+            "title": "New Chat",
+            "model": selected_model,
+            "messages": []
+        }
+        st.session_state.current_chat_id = chat_id
         st.rerun()
     
+    # Chat history
+    st.header("Chat History")
+    for chat_id, chat_data in st.session_state.chats.items():
+        chat_title = f"{chat_data['title']} ({chat_data['model']})"
+        if st.sidebar.button(chat_title, key=f"chat_{chat_id}"):
+            st.session_state.current_chat_id = chat_id
+            st.rerun()
+
     st.markdown("---")
     st.markdown("""
     ### Instructions
@@ -91,25 +115,51 @@ with st.sidebar:
 
 # Chat interface
 if selected_model:
+    current_chat = st.session_state.chats.get(st.session_state.current_chat_id, {
+        "title": "New Chat",
+        "model": selected_model,
+        "messages": []
+    })
+    
     # Display chat history
-    for message in st.session_state.messages:
+    for message in current_chat["messages"]:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
     
     # Chat input
     if prompt := st.chat_input("Type your message here..."):
         # Add user message to chat history
-        st.session_state.messages.append({"role": "user", "content": prompt})
+        current_chat["messages"].append({"role": "user", "content": prompt})
+        
+        # Generate title for new chats
+        if len(current_chat["messages"]) == 1:
+            current_chat["title"] = generate_chat_title(prompt)
+        
         with st.chat_message("user"):
             st.markdown(prompt)
         
         # Get bot response
         with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                context = [{"role": m["role"], "content": m["content"]} 
-                          for m in st.session_state.messages[:-1]]
-                response = chat_with_ollama(selected_model, prompt, context)
-                st.markdown(response)
-                st.session_state.messages.append({"role": "assistant", "content": response})
+            response_placeholder = st.empty()
+            full_response = ""
+            
+            # Display streaming response
+            for response_chunk in chat_with_ollama(
+                selected_model,
+                prompt,
+                [{"role": m["role"], "content": m["content"]} for m in current_chat["messages"][:-1]]
+            ):
+                full_response += response_chunk
+                response_placeholder.markdown(full_response + "▌")
+            
+            response_placeholder.markdown(full_response)
+            current_chat["messages"].append({"role": "assistant", "content": full_response})
+        
+        # Update chat in session state
+        if st.session_state.current_chat_id is None:
+            chat_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+            st.session_state.current_chat_id = chat_id
+        st.session_state.chats[st.session_state.current_chat_id] = current_chat
+
 else:
     st.warning("Please select a model from the sidebar to start chatting.")
