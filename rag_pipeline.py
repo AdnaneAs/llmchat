@@ -16,9 +16,9 @@ class RAGPipeline:
             metadata={"hnsw:space": "cosine"}  # Using cosine similarity
         )
         
-        # Initialize Ollama embeddings
+        # Initialize Ollama embeddings with correct parameters
         self.embed_model = OllamaEmbeddings(
-            model_name="nomic-embed-text",
+            model="nomic-embed-text",  # Changed from model_name to model
             base_url="http://localhost:11434"
         )
 
