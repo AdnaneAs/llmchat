@@ -142,7 +142,7 @@ class RAGPipeline:
         results.sort(key=lambda x: x["final_score"], reverse=True)
         return results[:top_k]
 
-    def query(self, query_text: str, num_results: int = 5, threshold: float = 0.1) -> dict:  # Even lower threshold
+    def query(self, query_text: str, num_results: int = 5, threshold: float = 0.1) -> dict:
         """Query using similarity search"""
         try:
             # Verify collection exists and has documents
@@ -252,12 +252,13 @@ class RAGPipeline:
                         print(f"Preview: {result['text'][:100]}...")
                         print("---")
             
-            # Format context for LLM with improved prompting
-            context = "Here are the most relevant passages for your question, ranked by relevance:\n\n"
+            # Format context for LLM
+            context = "Here are the relevant passages from your documents:\n\n"
             for i, result in enumerate(filtered_results, 1):
+                score = result.get("final_score", result["score"])  # Fallback to original score if final_score not set
                 context += (
                     f"[Passage {i}] From '{result['source']}' "
-                    f"(Relevance: {result['final_score']:.2f}):\n"
+                    f"(Relevance: {score:.2f}):\n"
                     f"{result['text'].strip()}\n\n"
                 )
             

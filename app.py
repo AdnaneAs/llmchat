@@ -275,102 +275,66 @@ if selected_model:
             full_response = ""
             
             if st.session_state.rag_mode and st.session_state.documents_indexed:
-                with st.spinner("🤔 Searching through documents..."):
-                    try:
-                        rag = get_rag_pipeline()
-                        rag_response = rag.query(prompt)
+                try:
+                    rag = get_rag_pipeline()
+                    rag_response = rag.query(prompt)
+                    
+                    # Debug information without nested expanders
+                    if st.session_state.debug_mode:
+                        st.write("🔍 Debug Information")
+                        st.json(rag_response.get('debug_info', {}))
                         
-                        # Enhanced debug information display
-                        if st.session_state.debug_mode:
-                            st.write("🔍 Debug Information:")
-                            st.json(rag_response.get('debug_info', {}))
-                            
-                            if 'max_similarity' in rag_response.get('debug_info', {}):
-                                st.write("Similarity Analysis:")
-                                max_sim = rag_response['debug_info']['max_similarity']
-                                threshold = rag_response['debug_info']['threshold_used']
-                                st.progress(max_sim, f"Max Similarity: {max_sim:.3f}")
-                                st.progress(threshold, f"Threshold: {threshold:.3f}")
+                        if 'max_similarity' in rag_response.get('debug_info', {}):
+                            st.write("Similarity Analysis")
+                            max_sim = rag_response['debug_info']['max_similarity']
+                            threshold = rag_response['debug_info']['threshold_used']
+                            st.progress(max_sim, f"Max Similarity: {max_sim:.3f}")
+                            st.progress(threshold, f"Threshold: {threshold:.3f}")
 
-                        # Show document preview even if no matches found
-                        collection_size = rag_response.get('debug_info', {}).get('collection_size', 0)
-                        if collection_size > 0:
-                            st.write("📚 Collection Status:")
-                            st.write(f"Total documents in collection: {collection_size}")
-                            if not rag_response.get('sources', []):
-                                st.warning("No documents matched your query above the similarity threshold. Try:")
-                                st.write("1. Rephrasing your question")
-                                st.write("2. Checking if the question is related to the indexed content")
-                                st.write("3. The current similarity threshold might be too high")
+                    # Simple source display without expanders
+                    if rag_response.get('sources', []):
+                        st.write("📚 Retrieved Sources:")
+                        for idx, source in enumerate(rag_response['sources'], 1):
+                            st.write(f"[{idx}] {source['source']} (Score: {source.get('final_score', source['score']):.2f})")
+                            if st.session_state.debug_mode:
+                                st.text_area(f"Content {idx}", value=source['text'][:500], height=100)
+                        
+                        # Construct enhanced prompt with retrieved information
+                        context_info = "\n=== Retrieved Information ===\n\n"
+                        for idx, source in enumerate(rag_response['sources'], 1):
+                            context_info += f"[{idx}] Score: {source.get('final_score', source['score']):.2f}\n{source['text']}\n\n"
+                        
+                        enhanced_prompt = f"""Question: {prompt}
 
-                        # Display sources and passages
-                        if rag_response.get('sources', []):
-                            st.write("📚 Retrieved Passages:")
-                            for idx, source in enumerate(rag_response['sources'], 1):
-                                st.write(f"[Passage {idx}] {source['source']} (Relevance: {source['score']:.2f})")
-                                if st.session_state.debug_mode:
-                                    st.text(source['text'][:500] + "..." if len(source['text']) > 500 else source['text'])
-                                st.markdown("---")
+{context_info}
 
-                        if rag_response.get('total_results', 0) > 0:
-                            # Create a more focused prompt based on retrieved context
-                            enhanced_prompt = f"""You are a knowledgeable assistant analyzing documents. I will provide you with relevant passages from documents and a question. Your task is to answer the question using ONLY the information from these passages.
-
-Context Information (passages are ranked by relevance):
-{rag_response['context']}
-
-User Question: {prompt}
-
-Instructions:
-1. Answer ONLY based on the provided passages - do not use any external knowledge
-2. Always cite your sources using [Passage X] notation when making a statement
-3. If the exact answer is found in the passages, quote it directly
-4. If multiple passages contain relevant information, combine them logically
-5. If the passages don't contain enough information to fully answer the question, explicitly state what's missing
-6. Focus on the most relevant passages first (they are ranked by relevance)
-
-Please provide your detailed answer:"""
-                        else:
-                            if collection_size == 0:
-                                enhanced_prompt = f"""The document collection is empty. No documents have been indexed yet.
-Please inform the user that they need to:
-1. Upload and index some documents first
-2. Make sure the documents were properly indexed
-3. Try their question again after indexing some documents"""
-                            else:
-                                enhanced_prompt = f"""While there are {collection_size} documents in the collection, none were found to be relevant to: "{prompt}"
-
-Please inform the user that:
-1. The question might need to be rephrased to better match the content
-2. The documents might not contain the information they're looking for
-3. They might want to check what documents are actually indexed"""
-
-                        # Add a small info box showing the sources being used
-                        if rag_response.get('sources', []):
-                            with st.expander("📚 Sources Used", expanded=False):
-                                st.write("Retrieved passages from:")
-                                for idx, source in enumerate(rag_response['sources'], 1):
-                                    st.write(f"- [Passage {idx}] {source['source']} (Relevance: {source['score']:.2f})")
-                                    if st.session_state.debug_mode:
-                                        with st.expander(f"Preview Passage {idx}", expanded=False):
-                                            st.text(source['text'][:500] + "..." if len(source['text']) > 500 else source['text'])
-                    except Exception as e:
-                        st.error(f"Error querying RAG pipeline: {str(e)}")
+Please answer the question using ONLY the information provided above. If you find the exact answer, quote it and cite the source using [X]. If the answer isn't in the provided information, say so."""
+                    else:
                         enhanced_prompt = prompt
+                        st.warning("No relevant information found in the indexed documents.")
+                    
+                except Exception as e:
+                    st.error(f"RAG Error: {str(e)}")
+                    enhanced_prompt = prompt
             else:
                 enhanced_prompt = prompt
-            
-            # Display streaming response
+
+            # Display streaming response with enhanced prompt
             with st.spinner("🤖 Thinking..."):
                 for response_chunk in chat_with_ollama(
                     selected_model,
                     enhanced_prompt,
-                    [{"role": m["role"], "content": m["content"]} for m in current_chat["messages"][:-1]]
+                    current_chat["messages"][:-1]  # Previous messages without current prompt
                 ):
                     full_response += response_chunk
                     response_placeholder.markdown(full_response + "▌")
             
             response_placeholder.markdown(full_response)
+            
+            # Store messages in chat history
+            if st.session_state.rag_mode and st.session_state.documents_indexed:
+                # Store the original prompt but with context information
+                current_chat["messages"][-1]["content"] = f"{prompt}\n\nContext Used:\n{rag_response.get('context', '')}"
             current_chat["messages"].append({"role": "assistant", "content": full_response})
         
         # Update chat in session state
