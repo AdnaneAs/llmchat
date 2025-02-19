@@ -314,19 +314,20 @@ if selected_model:
 
                         if rag_response.get('total_results', 0) > 0:
                             # Create a more focused prompt based on retrieved context
-                            enhanced_prompt = f"""You are a knowledgeable assistant analyzing documents. Use the provided context to answer questions accurately.
+                            enhanced_prompt = f"""You are a knowledgeable assistant analyzing documents. I will provide you with relevant passages from documents and a question. Your task is to answer the question using ONLY the information from these passages.
 
-Context Information:
+Context Information (passages are ranked by relevance):
 {rag_response['context']}
 
 User Question: {prompt}
 
 Instructions:
-1. Base your answer primarily on the provided context
-2. When referencing specific information, cite the source using [Passage X]
-3. If the context doesn't fully answer the question, clearly state what information is missing
-4. If you use multiple passages, explain how they relate to each other
-5. Keep your answer focused and relevant to the question
+1. Answer ONLY based on the provided passages - do not use any external knowledge
+2. Always cite your sources using [Passage X] notation when making a statement
+3. If the exact answer is found in the passages, quote it directly
+4. If multiple passages contain relevant information, combine them logically
+5. If the passages don't contain enough information to fully answer the question, explicitly state what's missing
+6. Focus on the most relevant passages first (they are ranked by relevance)
 
 Please provide your detailed answer:"""
                         else:

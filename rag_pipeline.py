@@ -119,6 +119,29 @@ class RAGPipeline:
         except Exception as e:
             raise Exception(f"Error during indexing: {str(e)}")
 
+    def _semantic_rerank(self, query: str, results: List[Dict], top_k: int = 3) -> List[Dict]:
+        """Rerank results using semantic similarity with the query"""
+        if not results:
+            return []
+        
+        # Get embeddings for query and passages
+        query_embedding = self._get_embeddings([query])[0]
+        passage_embeddings = self._get_embeddings([r["text"] for r in results])
+        
+        # Calculate semantic similarities
+        for idx, (result, embedding) in enumerate(zip(results, passage_embeddings)):
+            # Calculate cosine similarity
+            similarity = np.dot(query_embedding, embedding) / (
+                np.linalg.norm(query_embedding) * np.linalg.norm(embedding)
+            )
+            results[idx]["semantic_score"] = float(similarity)
+            # Combine original score with semantic score
+            results[idx]["final_score"] = (results[idx]["score"] + results[idx]["semantic_score"]) / 2
+        
+        # Sort by final score
+        results.sort(key=lambda x: x["final_score"], reverse=True)
+        return results[:top_k]
+
     def query(self, query_text: str, num_results: int = 5, threshold: float = 0.1) -> dict:  # Even lower threshold
         """Query using similarity search"""
         try:
@@ -216,17 +239,34 @@ class RAGPipeline:
                     }
                 }
             
-            # Format context for LLM
-            context = "Here are the relevant passages from your documents:\n\n"
+            # Apply semantic reranking to filtered results
+            if filtered_results:
+                filtered_results = self._semantic_rerank(query_text, filtered_results)
+                if self.debug:
+                    print("\nReranking Results:")
+                    for result in filtered_results:
+                        print(f"Document: {result['source']}")
+                        print(f"Original Score: {result['score']:.4f}")
+                        print(f"Semantic Score: {result['semantic_score']:.4f}")
+                        print(f"Final Score: {result['final_score']:.4f}")
+                        print(f"Preview: {result['text'][:100]}...")
+                        print("---")
+            
+            # Format context for LLM with improved prompting
+            context = "Here are the most relevant passages for your question, ranked by relevance:\n\n"
             for i, result in enumerate(filtered_results, 1):
-                context += f"[Passage {i}] From document '{result['source']}' (Relevance: {result['score']:.2f}):\n"
-                context += f"{result['text'].strip()}\n\n"
+                context += (
+                    f"[Passage {i}] From '{result['source']}' "
+                    f"(Relevance: {result['final_score']:.2f}):\n"
+                    f"{result['text'].strip()}\n\n"
+                )
             
             if self.debug:
                 print("\nFinal Response Summary:")
-                print(f"Number of filtered results: {len(filtered_results)}")
+                print(f"Number of reranked results: {len(filtered_results)}")
                 print(f"Context length: {len(context)}")
-                print("Highest relevance score:", max(result["score"] for result in filtered_results))
+                if filtered_results:
+                    print("Top result score:", filtered_results[0]["final_score"])
             
             return {
                 "context": context,
@@ -237,7 +277,7 @@ class RAGPipeline:
                     "initial_results": len(documents),
                     "filtered_results": len(filtered_results),
                     "threshold_used": threshold,
-                    "max_similarity": max(similarities)
+                    "max_similarity": max(result["final_score"] for result in filtered_results) if filtered_results else None
                 }
             }
             
