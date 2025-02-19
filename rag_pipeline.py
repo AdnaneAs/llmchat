@@ -119,35 +119,56 @@ class RAGPipeline:
         except Exception as e:
             raise Exception(f"Error during indexing: {str(e)}")
 
-    def query(self, query_text: str, num_results: int = 5, threshold: float = 0.3) -> dict:  # Lower threshold further
+    def query(self, query_text: str, num_results: int = 5, threshold: float = 0.1) -> dict:  # Even lower threshold
         """Query using similarity search"""
         try:
-            # Get query embedding
+            # Verify collection exists and has documents
+            collection_count = self.collection.count()
+            
             if self.debug:
                 print(f"\n=== Query Debug Info ===")
                 print(f"Query text: {query_text}")
-                print(f"Collection size: {self.collection.count()}")
+                print(f"Collection size: {collection_count}")
             
+            if collection_count == 0:
+                if self.debug:
+                    print("Collection is empty!")
+                return {
+                    "answer": "No documents found in the collection.",
+                    "sources": [],
+                    "context": "The document collection is empty.",
+                    "debug_info": {"collection_count": 0}
+                }
+            
+            # Get query embedding
             query_embedding = self._get_embeddings([query_text])[0]
             
             # Search in ChromaDB with more results initially
             initial_results = self.collection.query(
                 query_embeddings=[query_embedding],
-                n_results=min(10, self.collection.count()),  # Get more results initially
+                n_results=min(20, collection_count),  # Get more initial results
                 include=["documents", "distances", "metadatas"]
             )
             
             if self.debug:
-                print("\nChromaDB Query Results:")
-                print(json.dumps(initial_results, indent=2))
+                print("\nChromaDB Raw Query Results:")
+                print(json.dumps({
+                    "documents_count": len(initial_results['documents'][0]),
+                    "distances": initial_results['distances'][0],
+                    "metadatas": initial_results['metadatas'][0]
+                }, indent=2))
             
             if not initial_results['documents'][0]:
                 if self.debug:
-                    print("No documents found in collection")
+                    print("No documents returned from query")
                 return {
-                    "answer": "No documents found in the collection.",
+                    "answer": "No documents found in collection query.",
                     "sources": [],
-                    "context": "The document collection is empty."
+                    "context": "Query returned no results.",
+                    "debug_info": {
+                        "collection_count": collection_count,
+                        "query_embedding_sample": query_embedding[:5]
+                    }
                 }
             
             documents = initial_results['documents'][0]
@@ -158,54 +179,68 @@ class RAGPipeline:
             similarities = [1 - dist for dist in distances]
             
             if self.debug:
-                print("\nSimilarity Scores:")
+                print("\nSimilarity Scores Detail:")
                 for doc, sim, meta in zip(documents, similarities, metadatas):
-                    print(f"Score: {sim:.4f} - From {meta['file']}:")
-                    print(f"Text: {doc[:200]}...")
+                    print(f"\nScore: {sim:.4f} - From {meta['file']}:")
+                    print(f"Distance: {1-sim:.4f}")
+                    print(f"Text Preview: {doc[:100]}...")
             
-            # Filter and format results
-            filtered_results = []
-            for doc, sim, meta in zip(documents, similarities, metadatas):
-                if sim >= threshold:
-                    filtered_results.append({
-                        "text": doc,
-                        "score": sim,
-                        "source": meta["file"],
-                        "path": meta["path"]
-                    })
+            # Filter and format results with lower threshold
+            filtered_results = [
+                {
+                    "text": doc,
+                    "score": sim,
+                    "source": meta["file"],
+                    "path": meta["path"]
+                }
+                for doc, sim, meta in zip(documents, similarities, metadatas)
+                if sim >= threshold
+            ]
             
             # Sort by similarity score
             filtered_results.sort(key=lambda x: x["score"], reverse=True)
-            
-            # Take top N results
             filtered_results = filtered_results[:num_results]
             
             if not filtered_results:
                 if self.debug:
                     print(f"\nNo results above threshold {threshold}")
+                    print("Highest similarity score:", max(similarities) if similarities else "No similarities")
                 return {
                     "answer": "No sufficiently relevant documents found.",
                     "sources": [],
-                    "context": "While documents exist in the collection, none were relevant enough to the query."
+                    "context": "While documents exist in the collection, none were relevant enough to the query.",
+                    "debug_info": {
+                        "max_similarity": max(similarities) if similarities else None,
+                        "threshold": threshold,
+                        "total_results_before_filter": len(documents)
+                    }
                 }
             
-            # Format context for LLM in a more structured way
+            # Format context for LLM
             context = "Here are the relevant passages from your documents:\n\n"
             for i, result in enumerate(filtered_results, 1):
                 context += f"[Passage {i}] From document '{result['source']}' (Relevance: {result['score']:.2f}):\n"
                 context += f"{result['text'].strip()}\n\n"
             
             if self.debug:
-                print("\nFinal Response:")
+                print("\nFinal Response Summary:")
                 print(f"Number of filtered results: {len(filtered_results)}")
                 print(f"Context length: {len(context)}")
-                print("=========================\n")
+                print("Highest relevance score:", max(result["score"] for result in filtered_results))
             
             return {
                 "context": context,
                 "sources": filtered_results,
-                "total_results": len(filtered_results)
+                "total_results": len(filtered_results),
+                "debug_info": {
+                    "collection_size": collection_count,
+                    "initial_results": len(documents),
+                    "filtered_results": len(filtered_results),
+                    "threshold_used": threshold,
+                    "max_similarity": max(similarities)
+                }
             }
+            
         except Exception as e:
             if self.debug:
                 print(f"\nError in query: {str(e)}")
