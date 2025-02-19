@@ -42,15 +42,16 @@ st.markdown("""
 @st.cache_data(ttl=300)  # Cache model list for 5 minutes
 def get_ollama_models():
     """Fetch available Ollama models"""
-    try:
-        response = requests.get('http://localhost:11434/api/tags')
-        if response.status_code == 200:
-            models = [model['name'] for model in response.json()['models']]
-            return models
-        return []
-    except Exception as e:
-        st.error(f"Error connecting to Ollama: {str(e)}")
-        return []
+    with st.spinner("🔍 Loading available models..."):
+        try:
+            response = requests.get('http://localhost:11434/api/tags')
+            if response.status_code == 200:
+                models = [model['name'] for model in response.json()['models']]
+                return models
+            return []
+        except Exception as e:
+            st.error(f"Error connecting to Ollama: {str(e)}")
+            return []
 
 def chat_with_ollama(model, message, context=[]):
     """Send a message to Ollama and get the response"""
@@ -95,7 +96,7 @@ def generate_chat_title(first_message):
 # Initialize RAG pipeline
 @st.cache_resource
 def get_rag_pipeline():
-    return RAGPipeline(persist_dir="./chroma_db")
+    return RAGPipeline(persist_dir="./chroma_db", debug=st.session_state.get('debug_mode', False))
 
 # Initialize session state
 if 'chats' not in st.session_state:
@@ -143,7 +144,7 @@ with st.sidebar:
             )
             
             if uploaded_files and st.button("Index Documents"):
-                with st.spinner("Indexing documents..."):
+                with st.spinner("📚 Processing and indexing documents..."):
                     rag = get_rag_pipeline()
                     # Save uploaded files temporarily
                     temp_files = []
@@ -151,12 +152,26 @@ with st.sidebar:
                         temp_path = f"temp_{file.name}"
                         with open(temp_path, "wb") as f:
                             f.write(file.getbuffer())
+                            
+                        # Verify file content
+                        if st.session_state.debug_mode:
+                            with open(temp_path, "r", encoding='utf-8') as f:
+                                content = f.read()
+                                st.expander(f"📄 Content of {file.name}", expanded=False).text(
+                                    f"First 500 characters:\n{content[:500]}..."
+                                )
+                        
                         temp_files.append(temp_path)
                     
                     try:
                         num_docs = rag.index_documents(files=temp_files)
                         st.session_state.documents_indexed = True
-                        st.success(f"Successfully indexed {num_docs} documents!")
+                        st.success(f"Successfully indexed {num_docs} chunks from {len(temp_files)} documents!")
+                        
+                        if st.session_state.debug_mode:
+                            collection_info = rag.collection.count()
+                            st.info(f"Total chunks in collection: {collection_info}")
+                            
                     except Exception as e:
                         st.error(f"Error indexing documents: {str(e)}")
                     finally:
@@ -168,7 +183,7 @@ with st.sidebar:
         else:  # Directory Path
             dir_path = st.text_input("Enter Directory Path")
             if dir_path and st.button("Index Documents"):
-                with st.spinner("Indexing documents..."):
+                with st.spinner("📚 Processing and indexing documents from directory..."):
                     try:
                         rag = get_rag_pipeline()
                         num_docs = rag.index_documents(directory_path=dir_path)
@@ -179,13 +194,14 @@ with st.sidebar:
         
         if st.session_state.documents_indexed:
             if st.button("Clear Index"):
-                try:
-                    rag = get_rag_pipeline()
-                    rag.clear_index()
-                    st.session_state.documents_indexed = False
-                    st.success("Index cleared successfully!")
-                except Exception as e:
-                    st.error(f"Error clearing index: {str(e)}")
+                with st.spinner("🗑️ Clearing document index..."):
+                    try:
+                        rag = get_rag_pipeline()
+                        rag.clear_index()
+                        st.session_state.documents_indexed = False
+                        st.success("Index cleared successfully!")
+                    except Exception as e:
+                        st.error(f"Error clearing index: {str(e)}")
     
     # New chat button
     if st.button("New Chat"):
@@ -259,27 +275,45 @@ if selected_model:
             full_response = ""
             
             if st.session_state.rag_mode and st.session_state.documents_indexed:
-                try:
-                    rag = get_rag_pipeline()
-                    rag_response = rag.query(prompt)
-                    context = "\n\nRelevant context:\n" + "\n".join(
-                        [f"- {source['text']}" for source in rag_response["sources"]]
-                    )
-                    enhanced_prompt = f"Given this context: {context}\n\nQuestion: {prompt}\n\nPlease provide a detailed answer based on the context provided."
-                except Exception as e:
-                    st.error(f"Error querying RAG pipeline: {str(e)}")
-                    enhanced_prompt = prompt
+                with st.spinner("🤔 Searching through documents..."):
+                    try:
+                        rag = get_rag_pipeline()
+                        rag_response = rag.query(prompt)
+                        
+                        if st.session_state.debug_mode:
+                            st.expander("🔍 Debug Information", expanded=True).json(rag_response)
+                        
+                        # Create a more focused prompt based on retrieved context
+                        enhanced_prompt = f"""I am going to ask you a question, and I'll provide you with relevant context from indexed documents. 
+Please use this context to answer the question accurately. If the context doesn't contain enough information, you can say so.
+
+Context from documents:
+{rag_response['context']}
+
+Question: {prompt}
+
+Please provide a detailed answer, and if you reference specific information, mention which source it came from using the [1], [2], etc. notation."""
+
+                        # Add a small info box showing the sources being used
+                        if rag_response['sources']:
+                            with st.expander("📚 Sources Used", expanded=False):
+                                for source in rag_response['sources']:
+                                    st.write(f"- {source['source']} (Relevance: {source['score']:.2f})")
+                    except Exception as e:
+                        st.error(f"Error querying RAG pipeline: {str(e)}")
+                        enhanced_prompt = prompt
             else:
                 enhanced_prompt = prompt
             
             # Display streaming response
-            for response_chunk in chat_with_ollama(
-                selected_model,
-                enhanced_prompt,
-                [{"role": m["role"], "content": m["content"]} for m in current_chat["messages"][:-1]]
-            ):
-                full_response += response_chunk
-                response_placeholder.markdown(full_response + "▌")
+            with st.spinner("🤖 Thinking..."):
+                for response_chunk in chat_with_ollama(
+                    selected_model,
+                    enhanced_prompt,
+                    [{"role": m["role"], "content": m["content"]} for m in current_chat["messages"][:-1]]
+                ):
+                    full_response += response_chunk
+                    response_placeholder.markdown(full_response + "▌")
             
             response_placeholder.markdown(full_response)
             current_chat["messages"].append({"role": "assistant", "content": full_response})

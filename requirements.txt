@@ -8,3 +8,5 @@ langchain-community
 langchain-core
 langchain-ollama
 numpy
+pydantic>=2.5.2
+pydantic-core>=2.14.5
