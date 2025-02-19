@@ -8,6 +8,7 @@ from chromadb.config import Settings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import hashlib
 import json
+import shutil
 
 class RAGPipeline:
     def __init__(self, persist_dir: str = "./chroma_db", debug: bool = False):
@@ -118,7 +119,7 @@ class RAGPipeline:
         except Exception as e:
             raise Exception(f"Error during indexing: {str(e)}")
 
-    def query(self, query_text: str, num_results: int = 5, threshold: float = 0.5) -> dict:  # Lowered threshold
+    def query(self, query_text: str, num_results: int = 5, threshold: float = 0.3) -> dict:  # Lower threshold further
         """Query using similarity search"""
         try:
             # Get query embedding
@@ -140,6 +141,15 @@ class RAGPipeline:
                 print("\nChromaDB Query Results:")
                 print(json.dumps(initial_results, indent=2))
             
+            if not initial_results['documents'][0]:
+                if self.debug:
+                    print("No documents found in collection")
+                return {
+                    "answer": "No documents found in the collection.",
+                    "sources": [],
+                    "context": "The document collection is empty."
+                }
+            
             documents = initial_results['documents'][0]
             distances = initial_results['distances'][0]
             metadatas = initial_results['metadatas'][0]
@@ -149,8 +159,9 @@ class RAGPipeline:
             
             if self.debug:
                 print("\nSimilarity Scores:")
-                for doc, sim in zip(documents, similarities):
-                    print(f"Score: {sim:.4f} - Text: {doc[:100]}...")
+                for doc, sim, meta in zip(documents, similarities, metadatas):
+                    print(f"Score: {sim:.4f} - From {meta['file']}:")
+                    print(f"Text: {doc[:200]}...")
             
             # Filter and format results
             filtered_results = []
@@ -173,15 +184,16 @@ class RAGPipeline:
                 if self.debug:
                     print(f"\nNo results above threshold {threshold}")
                 return {
-                    "answer": "No relevant documents found.",
+                    "answer": "No sufficiently relevant documents found.",
                     "sources": [],
-                    "context": "No relevant context found in the documents."
+                    "context": "While documents exist in the collection, none were relevant enough to the query."
                 }
             
-            # Format context for LLM
-            context = "Here are the most relevant passages I found:\n\n"
+            # Format context for LLM in a more structured way
+            context = "Here are the relevant passages from your documents:\n\n"
             for i, result in enumerate(filtered_results, 1):
-                context += f"[{i}] From {result['source']} (Relevance: {result['score']:.2f}):\n{result['text']}\n\n"
+                context += f"[Passage {i}] From document '{result['source']}' (Relevance: {result['score']:.2f}):\n"
+                context += f"{result['text'].strip()}\n\n"
             
             if self.debug:
                 print("\nFinal Response:")
@@ -191,7 +203,8 @@ class RAGPipeline:
             
             return {
                 "context": context,
-                "sources": filtered_results
+                "sources": filtered_results,
+                "total_results": len(filtered_results)
             }
         except Exception as e:
             if self.debug:
@@ -201,11 +214,24 @@ class RAGPipeline:
             raise Exception(f"Error during query: {str(e)}")
 
     def clear_index(self) -> None:
-        """Clear the vector store"""
+        """Clear the vector store and reinitialize the collection"""
         try:
-            self.collection.delete(where=None)
+            # Delete the collection
+            self.chroma_client.delete_collection(self.collection_name)
+            
+            # Delete the persist directory contents
+            if os.path.exists(self.persist_dir):
+                shutil.rmtree(self.persist_dir)
+                os.makedirs(self.persist_dir, exist_ok=True)
+            
+            # Reinitialize the collection
+            self.collection = self.chroma_client.get_or_create_collection(
+                name=self.collection_name,
+                metadata={"hnsw:space": "cosine"}
+            )
+            
             if self.debug:
-                print(f"Index cleared. Collection size: {self.collection.count()}")
+                print(f"Index cleared and reinitialized. Collection size: {self.collection.count()}")
         except Exception as e:
             raise Exception(f"Error clearing index: {str(e)}")
 
