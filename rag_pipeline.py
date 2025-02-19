@@ -9,6 +9,30 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 import hashlib
 import json
 import shutil
+from PyPDF2 import PdfReader
+
+def extract_text_from_file(file_path: str) -> str:
+    """Extract text from different file types"""
+    ext = get_file_extension(file_path)
+    if ext == '.pdf':
+        try:
+            reader = PdfReader(file_path)
+            text = ""
+            for page in reader.pages:
+                text += page.extract_text() + "\n"
+            return text
+        except Exception as e:
+            raise Exception(f"Error reading PDF file: {str(e)}")
+    else:
+        # For text files, try different encodings
+        encodings = ['utf-8', 'latin-1', 'cp1252']
+        for encoding in encodings:
+            try:
+                with open(file_path, 'r', encoding=encoding) as f:
+                    return f.read()
+            except UnicodeDecodeError:
+                continue
+        raise Exception(f"Could not read file with any supported encoding: {file_path}")
 
 class RAGPipeline:
     def __init__(self, persist_dir: str = "./chroma_db", debug: bool = False):
@@ -70,19 +94,17 @@ class RAGPipeline:
                 for file in os.listdir(directory_path):
                     if is_valid_file(file):
                         file_path = os.path.join(directory_path, file)
-                        with open(file_path, 'r', encoding='utf-8') as f:
-                            text = f.read()
-                            source_info = {"file": file, "path": file_path}
-                            chunks = self._chunk_text(text, source_info)
-                            all_chunks.extend(chunks)
+                        text = extract_text_from_file(file_path)
+                        source_info = {"file": file, "path": file_path}
+                        chunks = self._chunk_text(text, source_info)
+                        all_chunks.extend(chunks)
             elif files:
                 for file in files:
                     if is_valid_file(file):
-                        with open(file, 'r', encoding='utf-8') as f:
-                            text = f.read()
-                            source_info = {"file": os.path.basename(file), "path": file}
-                            chunks = self._chunk_text(text, source_info)
-                            all_chunks.extend(chunks)
+                        text = extract_text_from_file(file)
+                        source_info = {"file": os.path.basename(file), "path": file}
+                        chunks = self._chunk_text(text, source_info)
+                        all_chunks.extend(chunks)
             else:
                 raise ValueError("Either directory_path or files must be provided")
 

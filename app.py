@@ -152,14 +152,10 @@ with st.sidebar:
                         temp_path = f"temp_{file.name}"
                         with open(temp_path, "wb") as f:
                             f.write(file.getbuffer())
-                            
-                        # Verify file content
+                        
+                        # Debug mode only shows file names
                         if st.session_state.debug_mode:
-                            with open(temp_path, "r", encoding='utf-8') as f:
-                                content = f.read()
-                                st.expander(f"📄 Content of {file.name}", expanded=False).text(
-                                    f"First 500 characters:\n{content[:500]}..."
-                                )
+                            st.info(f"Processing file: {file.name}")
                         
                         temp_files.append(temp_path)
                     
@@ -308,7 +304,7 @@ if selected_model:
 
 {context_info}
 
-Please answer the question using ONLY the information provided above. If you find the exact answer, quote it and cite the source using [X]. If the answer isn't in the provided information, say so."""
+Please Undertstand the Question and decide if it is a question you should answer directly as a assistance without external resources. if not  answer the question using Based the information provided above. If you find the exact answer, quote it and cite the source using [X]. If the answer isn't in the provided information, say so."""
                     else:
                         enhanced_prompt = prompt
                         st.warning("No relevant information found in the indexed documents.")
@@ -331,12 +327,9 @@ Please answer the question using ONLY the information provided above. If you fin
             
             response_placeholder.markdown(full_response)
             
-            # Store messages in chat history
-            if st.session_state.rag_mode and st.session_state.documents_indexed:
-                # Store the original prompt but with context information
-                current_chat["messages"][-1]["content"] = f"{prompt}\n\nContext Used:\n{rag_response.get('context', '')}"
+            # Store messages in chat history (only store original prompt)
             current_chat["messages"].append({"role": "assistant", "content": full_response})
-        
+
         # Update chat in session state
         if st.session_state.current_chat_id is None:
             chat_id = datetime.now().strftime("%Y%m%d_%H%M%S")

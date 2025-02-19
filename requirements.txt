@@ -1,7 +1,7 @@
 streamlit
 chromadb>=0.4.22
 python-dotenv
-pypdf
+PyPDF2
 docx2txt
 langchain
 langchain-community
