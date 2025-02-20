@@ -10,32 +10,56 @@ import hashlib
 import json
 import shutil
 from PyPDF2 import PdfReader
+import docx2txt
 
 def extract_text_from_file(file_path: str) -> str:
     """Extract text from different file types"""
-    ext = get_file_extension(file_path)
-    if ext == '.pdf':
-        try:
-            reader = PdfReader(file_path)
-            text = ""
-            for page in reader.pages:
-                text += page.extract_text() + "\n"
-            return text
-        except Exception as e:
-            raise Exception(f"Error reading PDF file: {str(e)}")
-    else:
-        # For text files, try different encodings
-        encodings = ['utf-8', 'latin-1', 'cp1252']
+    try:
+        ext = get_file_extension(file_path)
+        
+        # Handle PDF files
+        if ext == '.pdf':
+            print(f"Reading PDF file: {file_path}")
+            try:
+                with open(file_path, 'rb') as file:  # Open in binary mode
+                    reader = PdfReader(file)
+                    text = ""
+                    for page in reader.pages:
+                        text += page.extract_text() + "\n"
+                    return text if text.strip() else "No text content extracted from PDF"
+            except Exception as e:
+                raise Exception(f"Error reading PDF file: {str(e)}")
+        
+        # Handle DOCX files
+        elif ext in ['.docx', '.doc']:
+            try:
+                text = docx2txt.process(file_path)
+                return text if text.strip() else "No text content extracted from document"
+            except Exception as e:
+                raise Exception(f"Error reading DOCX file: {str(e)}")
+        
+        # Handle text files with different encodings
+        encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
         for encoding in encodings:
             try:
                 with open(file_path, 'r', encoding=encoding) as f:
-                    return f.read()
+                    text = f.read()
+                    # Verify the text is actually readable
+                    text.encode('utf-8')
+                    return text
             except UnicodeDecodeError:
                 continue
+            except UnicodeEncodeError:
+                continue
+            except Exception as e:
+                continue
+                
         raise Exception(f"Could not read file with any supported encoding: {file_path}")
+    except Exception as e:
+        raise Exception(f"Error processing file {file_path}: {str(e)}")
 
 class RAGPipeline:
-    def __init__(self, persist_dir: str = "./chroma_db", debug: bool = False):
+    def __init__(self, persist_dir: str = "./chroma_db", debug: bool = False, embedding_model: str = "nomic-embed-text"):
         self.persist_dir = persist_dir
         self.debug = debug
         self.chroma_client = chromadb.PersistentClient(path=persist_dir)
@@ -52,9 +76,9 @@ class RAGPipeline:
             length_function=len,
         )
         
-        # Initialize Ollama embeddings with correct parameters
+        # Initialize Ollama embeddings with user-selected model
         self.embed_model = OllamaEmbeddings(
-            model="nomic-embed-text",
+            model=embedding_model,
             base_url="http://localhost:11434"
         )
 
@@ -94,19 +118,26 @@ class RAGPipeline:
                 for file in os.listdir(directory_path):
                     if is_valid_file(file):
                         file_path = os.path.join(directory_path, file)
+                        if self.debug:
+                            print(f"Processing file: {file_path}")
                         text = extract_text_from_file(file_path)
                         source_info = {"file": file, "path": file_path}
                         chunks = self._chunk_text(text, source_info)
                         all_chunks.extend(chunks)
             elif files:
-                for file in files:
-                    if is_valid_file(file):
-                        text = extract_text_from_file(file)
-                        source_info = {"file": os.path.basename(file), "path": file}
-                        chunks = self._chunk_text(text, source_info)
-                        all_chunks.extend(chunks)
-            else:
-                raise ValueError("Either directory_path or files must be provided")
+                for file_path in files:
+                    if is_valid_file(file_path):
+                        if self.debug:
+                            print(f"Processing file: {file_path}")
+                        try:
+                            text = extract_text_from_file(file_path)
+                            source_info = {"file": os.path.basename(file_path), "path": file_path}
+                            chunks = self._chunk_text(text, source_info)
+                            all_chunks.extend(chunks)
+                        except Exception as e:
+                            if self.debug:
+                                print(f"Error processing file {file_path}: {str(e)}")
+                            raise Exception(f"Error processing file {file_path}: {str(e)}")
 
             if not all_chunks:
                 return 0
@@ -336,9 +367,16 @@ class RAGPipeline:
 # Helper functions for file handling
 def get_file_extension(file_name: str) -> str:
     """Get file extension from file name"""
-    return os.path.splitext(file_name)[1].lower()
+    try:
+        return os.path.splitext(file_name)[1].lower()
+    except:
+        return ""
 
 def is_valid_file(file_name: str) -> bool:
     """Check if file type is supported"""
-    valid_extensions = ['.txt', '.pdf', '.docx', '.doc', '.md']
-    return get_file_extension(file_name) in valid_extensions
+    try:
+        ext = get_file_extension(file_name)
+        valid_extensions = ['.txt', '.pdf', '.docx', '.doc', '.md']
+        return ext in valid_extensions
+    except:
+        return False

@@ -1,34 +1,66 @@
-# Ollama Chat Interface
+# Ollama Chat Interface with RAG Support
 
-A web-based chat interface for interacting with various Ollama models using Streamlit.
+A streamlined chat interface for Ollama models with Retrieval-Augmented Generation (RAG) capabilities.
 
 ## Features
-- Chat with different Ollama models
-- Switch between available models
-- Clean and intuitive user interface
-- History of conversations
 
-## Requirements
-- Python 3.8+
-- Ollama installed and running locally
-- Required Python packages (see requirements.txt)
+-  Interactive chat interface with Ollama models
+-  RAG (Retrieval-Augmented Generation) support for document-based Q&A
+-  Support for multiple document types:
+  - PDF files
+  - Word documents (DOCX, DOC)
+  - Text files (TXT)
+  - Markdown files (MD)
+-  Multiple embedding model selection for RAG
+-  Persistent chat history
+-  Advanced semantic search and reranking
+-  Debug mode for detailed information
+-  Document chunking and indexing
+-  Index clearing functionality
 
 ## Setup
-1. Clone this repository
-2. Install requirements:
-   ```
+
+1. Make sure you have Python 3.8+ installed
+2. Install Ollama from [https://ollama.ai/](https://ollama.ai/)
+3. Clone this repository
+4. Install the required packages:
+   ```bash
    pip install -r requirements.txt
-   ```
-3. Make sure Ollama is running on your system
-4. Run the application:
-   ```
-   streamlit run app.py
    ```
 
 ## Usage
-1. Select an Ollama model from the dropdown
-2. Type your message in the input field
-3. Press Enter or click Send to chat with the model
 
-## Note
-Ensure that Ollama is properly installed and running on your system before using this interface.
+1. Start Ollama server
+2. Run the application:
+   ```bash
+   streamlit run app.py
+   ```
+3. Select your preferred chat and embedding models from the sidebar
+4. Choose between regular chat mode or RAG mode
+
+### RAG Mode Features
+
+- Upload individual files or specify a directory path
+- Automatic text extraction from various document formats
+- Document chunking and embedding
+- Semantic search with reranking
+- Source citation in responses
+
+## Configuration
+
+The application includes several configurable options in the sidebar:
+
+- Chat Model Selection
+- Embedding Model Selection
+- Debug Mode Toggle
+- RAG Mode Toggle
+- Document Upload Options
+- Index Management
+
+
+## Notes
+
+- Ensure Ollama is running before starting the application
+- For PDF files, make sure they contain extractable text
+- Large documents are automatically chunked for better processing
+- Multiple encoding support for text files

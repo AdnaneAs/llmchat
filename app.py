@@ -53,6 +53,19 @@ def get_ollama_models():
             st.error(f"Error connecting to Ollama: {str(e)}")
             return []
 
+# Initialize session state for embedding model
+if 'embedding_model' not in st.session_state:
+    st.session_state.embedding_model = "nomic-embed-text"
+
+# Initialize RAG pipeline with selected embedding model
+@st.cache_resource
+def get_rag_pipeline():
+    return RAGPipeline(
+        persist_dir="./chroma_db", 
+        debug=st.session_state.get('debug_mode', False),
+        embedding_model=st.session_state.embedding_model
+    )
+
 def chat_with_ollama(model, message, context=[]):
     """Send a message to Ollama and get the response"""
     try:
@@ -93,11 +106,6 @@ def generate_chat_title(first_message):
         title += "..."
     return title
 
-# Initialize RAG pipeline
-@st.cache_resource
-def get_rag_pipeline():
-    return RAGPipeline(persist_dir="./chroma_db", debug=st.session_state.get('debug_mode', False))
-
 # Initialize session state
 if 'chats' not in st.session_state:
     st.session_state.chats = {}  # Dictionary to store all chats
@@ -121,7 +129,20 @@ with st.sidebar:
         st.error("No Ollama models found. Please make sure Ollama is running.")
         selected_model = None
     else:
-        selected_model = st.selectbox("Choose a model:", models)
+        selected_model = st.selectbox("Choose a chat model:", models)
+        # Add embedding model selection with cache clearing
+        previous_embedding_model = st.session_state.embedding_model
+        st.session_state.embedding_model = st.selectbox(
+            "Choose an embedding model:",
+            models,
+            index=models.index("nomic-embed-text") if "nomic-embed-text" in models else 0
+        )
+        
+        # Clear cache if embedding model changed
+        if previous_embedding_model != st.session_state.embedding_model:
+            get_rag_pipeline.clear()
+            if st.session_state.debug_mode:
+                st.sidebar.info(f"Switched embedding model to: {st.session_state.embedding_model}")
     
     # Mode toggles
     st.header("Mode Settings")
@@ -148,18 +169,20 @@ with st.sidebar:
                     rag = get_rag_pipeline()
                     # Save uploaded files temporarily
                     temp_files = []
-                    for file in uploaded_files:
-                        temp_path = f"temp_{file.name}"
-                        with open(temp_path, "wb") as f:
-                            f.write(file.getbuffer())
-                        
-                        # Debug mode only shows file names
-                        if st.session_state.debug_mode:
-                            st.info(f"Processing file: {file.name}")
-                        
-                        temp_files.append(temp_path)
-                    
                     try:
+                        for file in uploaded_files:
+                            # Create a filename safe path
+                            temp_path = os.path.join(os.getcwd(), f"temp_{file.name}")
+                            
+                            # Write the file in binary mode
+                            with open(temp_path, "wb") as f:
+                                f.write(file.getbuffer())
+                            
+                            if st.session_state.debug_mode:
+                                st.info(f"Saved file: {temp_path}")
+                            
+                            temp_files.append(temp_path)
+                        
                         num_docs = rag.index_documents(files=temp_files)
                         st.session_state.documents_indexed = True
                         st.success(f"Successfully indexed {num_docs} chunks from {len(temp_files)} documents!")
@@ -173,8 +196,14 @@ with st.sidebar:
                     finally:
                         # Cleanup temp files
                         for temp_file in temp_files:
-                            if os.path.exists(temp_file):
-                                os.remove(temp_file)
+                            try:
+                                if os.path.exists(temp_file):
+                                    os.remove(temp_file)
+                                    if st.session_state.debug_mode:
+                                        st.info(f"Cleaned up: {temp_file}")
+                            except Exception as e:
+                                if st.session_state.debug_mode:
+                                    st.warning(f"Error cleaning up {temp_file}: {str(e)}")
         
         else:  # Directory Path
             dir_path = st.text_input("Enter Directory Path")
