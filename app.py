@@ -5,6 +5,8 @@ from datetime import datetime
 import time
 from rag_pipeline import RAGPipeline, is_valid_file
 import os
+from openai import OpenAI
+import asyncio
 
 # Set page configuration
 st.set_page_config(page_title="Ollama Chat", page_icon="💭", layout="wide")
@@ -40,22 +42,71 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 @st.cache_data(ttl=300)  # Cache model list for 5 minutes
-def get_ollama_models():
-    """Fetch available Ollama models"""
+def get_models():
+    """Fetch available models (both Ollama and OpenAI)"""
+    models = []
+    # Add OpenAI models
+    models.extend(['gpt-4', 'gpt-4-turbo-preview', 'gpt-3.5-turbo'])
+    
+    # Add Ollama models
     with st.spinner("🔍 Loading available models..."):
         try:
             response = requests.get('http://localhost:11434/api/tags')
             if response.status_code == 200:
-                models = [model['name'] for model in response.json()['models']]
-                return models
-            return []
+                ollama_models = [model['name'] for model in response.json()['models']]
+                models.extend(ollama_models)
+            return models
         except Exception as e:
             st.error(f"Error connecting to Ollama: {str(e)}")
-            return []
+            return models
+
+def chat_with_openai(model, message, context=[]):
+    """Send a message to OpenAI and get the response"""
+    try:
+        if not st.session_state.openai_api_key:
+            yield "Please enter your OpenAI API key in the sidebar first."
+            return
+
+        # Reinitialize client with updated API key and organization
+        client = OpenAI(
+            api_key=st.session_state.openai_api_key,
+            timeout=60.0  # Add timeout for better error handling
+        )
+
+        messages = context + [{"role": "user", "content": message}]
+        
+        if st.session_state.get('debug_mode', False):
+            st.info("Request Payload:")
+            st.json({"model": model, "messages": messages})
+        
+        stream = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            stream=True
+        )
+        
+        for chunk in stream:
+            if chunk.choices[0].delta.content is not None:
+                yield chunk.choices[0].delta.content
+                
+    except Exception as e:
+        yield f"Error: {str(e)}"
+        if st.session_state.get('debug_mode', False):
+            st.error(f"OpenAI API Error Details: {str(e)}")
+
+def is_openai_model(model):
+    """Check if the selected model is an OpenAI model"""
+    return model.startswith('gpt-')
 
 # Initialize session state for embedding model
 if 'embedding_model' not in st.session_state:
     st.session_state.embedding_model = "nomic-embed-text"
+
+# Initialize session states for OpenAI
+if 'openai_api_key' not in st.session_state:
+    st.session_state.openai_api_key = ""
+if 'openai_client' not in st.session_state:
+    st.session_state.openai_client = None
 
 # Initialize RAG pipeline with selected embedding model
 @st.cache_resource
@@ -124,12 +175,24 @@ st.title("💭 Ollama Chat Interface")
 # Sidebar for model selection and controls
 with st.sidebar:
     st.header("Model Selection")
-    models = get_ollama_models()
+    models = get_models()
+    
     if not models:
-        st.error("No Ollama models found. Please make sure Ollama is running.")
+        st.error("No models found. Please make sure Ollama is running for local models.")
         selected_model = None
     else:
         selected_model = st.selectbox("Choose a chat model:", models)
+        
+        # Add OpenAI API key input if OpenAI model is selected
+        if selected_model and is_openai_model(selected_model):
+            with st.expander("OpenAI Settings", expanded=True):
+                st.session_state.openai_api_key = st.text_input(
+                    "OpenAI API Key", 
+                    value=st.session_state.openai_api_key,
+                    type="password",
+                    help="Enter your OpenAI API key to use GPT models"
+                )
+        
         # Add embedding model selection with cache clearing
         previous_embedding_model = st.session_state.embedding_model
         st.session_state.embedding_model = st.selectbox(
@@ -219,7 +282,7 @@ with st.sidebar:
         
         if st.session_state.documents_indexed:
             if st.button("Clear Index"):
-                with st.spinner("🗑️ Clearing document index..."):
+                with st.spinner("Clearing document index..."):
                     try:
                         rag = get_rag_pipeline()
                         rag.clear_index()
@@ -253,7 +316,7 @@ with st.sidebar:
                 st.rerun()
         
         with col2:
-            if st.button("🗑️", key=f"delete_{chat_id}", help="Delete chat"):
+            if st.button("X", key=f"delete_{chat_id}", help="Delete chat"):
                 del st.session_state.chats[chat_id]
                 if st.session_state.current_chat_id == chat_id:
                     st.session_state.current_chat_id = None
@@ -325,15 +388,22 @@ if selected_model:
                                 st.text_area(f"Content {idx}", value=source['text'][:500], height=100)
                         
                         # Construct enhanced prompt with retrieved information
-                        context_info = "\n=== Retrieved Information ===\n\n"
+                        context_info = "\n Retrieved Information : \n\n"
                         for idx, source in enumerate(rag_response['sources'], 1):
                             context_info += f"[{idx}] Score: {source.get('final_score', source['score']):.2f}\n{source['text']}\n\n"
                         
-                        enhanced_prompt = f"""Question: {prompt}
+                        enhanced_prompt = f"""
+Question: {prompt}
 
-{context_info}
+Before answering, determine if the input is a general conversational phrase (e.g., greetings, thank-yous, acknowledgments). 
+If it is, respond accordingly without searching external sources.
 
-Please Undertstand the Question and decide if it is a question you should answer directly as a assistance without external resources. if not  answer the question using Based the information provided above. If you find the exact answer, quote it and cite the source using [X]. If the answer isn't in the provided information, say so."""
+Otherwise, understand the question and decide if it requires external resources. 
+If not, answer directly as an assistant. If the answer is in the provided information, quote it and cite the source using [X]. 
+If the answer isn't in the provided information, say so.
+
+context info : {context_info} 
+"""
                     else:
                         enhanced_prompt = prompt
                         st.warning("No relevant information found in the indexed documents.")
@@ -345,8 +415,9 @@ Please Undertstand the Question and decide if it is a question you should answer
                 enhanced_prompt = prompt
 
             # Display streaming response with enhanced prompt
-            with st.spinner("🤖 Thinking..."):
-                for response_chunk in chat_with_ollama(
+            with st.spinner(" 🤖 Thinking..."):
+                chat_function = chat_with_openai if is_openai_model(selected_model) else chat_with_ollama
+                for response_chunk in chat_function(
                     selected_model,
                     enhanced_prompt,
                     current_chat["messages"][:-1]  # Previous messages without current prompt

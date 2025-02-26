@@ -38,3 +38,4 @@ chroma_db/
 # Local environment files
 .env
 .env.local
+.venv
